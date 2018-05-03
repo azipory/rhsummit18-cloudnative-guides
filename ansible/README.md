@@ -14,9 +14,8 @@ Playbook Variables
 |`user_gogs_admin`      | `gogs`        | Admin username to create in Gogs |
 |`user_gogs_test`       | `test`        | Test username to create in Gogs |
 |`user_gogs_password`   | `openshift`   | Gogs password to configure for admin and test users |
-|`project_suffix`       | NONE          | Project suffix for project names to be created e.g. `prod{PROJECT_SUFFIX}` |
+|`project_suffix`       | -             | Project suffix for project names to be created e.g. `prod{PROJECT_SUFFIX}` |
 |`user_openshift`       | `developer`   | User to set as the admin of dev and prod projects |
-|`clean_init`           | `false`       | Clean the environment and remove projects before init |
 
 
 How To Run
@@ -47,11 +46,12 @@ Tips
 
   ```
   docker pull registry.access.redhat.com/redhat-openjdk-18/openjdk18-openshift:1.2
-  docker pull registry.access.redhat.com/rhscl/nodejs-4-rhel7:latest
-  docker pull registry.access.redhat.com/openshift3/jenkins-2-rhel7:latest
-  docker pull registry.access.redhat.com/openshift3/jenkins-slave-maven-rhel7:latest
-  docker pull registry.access.redhat.com/rhscl/postgresql-95-rhel7:latest
-  docker pull registry.access.redhat.com/rhscl/postgresql-96-rhel7:latest
+  docker pull docker.io/centos/nodejs-4-centos7:latest
+  docker pull openshift/origin:v3.9
+  docker pull openshift/jenkins-2-centos7:v3.9
+  docker pull openshift/jenkins-slave-maven-centos7:v3.9
+  docker pull docker.io/centos/postgresql-95-centos7
+  docker pull docker.io/centos/postgresql-96-centos7
   docker pull sonatype/nexus3:3.7.1
   docker pull openshiftdemos/gogs:0.11.34
   docker pull eclipse/che:6.3.0
@@ -69,11 +69,5 @@ Tips
   docker pull openshiftistio/pilot-centos7:0.7.1
   docker pull prom/statsd-exporter:v0.5.0
   docker pull openshiftistio/sidecar-injector-centos7:0.7.1
-  docker pull registry.centos.org/rhsyseng/elasticsearch:6.2.2
-  ```
-
-* Add an admin user to the cluster. Run the following as `system:admin`:
-
-  ```
-  oc adm policy add-cluster-role-to-user cluster-admin admin
+  docker pull registry.centos.org/rhsyseng/elasticsearch:5.5.2
   ```

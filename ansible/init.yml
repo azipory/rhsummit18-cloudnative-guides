@@ -13,47 +13,47 @@
     github_account: openshift-labs
     github_ref: master
     project_suffix: 
-    istio_version: 0.6.0
-    clean_init: false
-    istio_options: 
+    guid: repl
+    apps_hostname_suffix: apps-{{ guid }}.generic.opentlc.com
+    master_hostname: master-{{ guid }}.generic.opentlc.com
   tasks:
-    - include_role:
-        name: openshift_common_facts
-      tags: always
+    - name: download istiooc
+      get_url:
+        url: "https://github.com/openshift-istio/origin/releases/download/istio-3.9-0.7.1-alpha8/istiooc_linux"
+        dest: "/usr/local/sbin/oc"
+        mode: ugo+rx
+        force: true
+
+    - name: start openshift cluster
+      shell: "{{ openshift_cli }} cluster up --public-hostname={{ master_hostname }} --routing-suffix={{ apps_hostname_suffix }} --istio </dev/null >/dev/null 2>&1 &"
+
+    - name: log into the cluster
+      shell: "{{ openshift_cli }} login {{ master_hostname }}:8443 -u system:admin"
+      ignore_errors: true
+      register: oc_login_result
+      until: oc_login_result|succeeded
+      retry: 30
+      delay: 30
+
+    - name: fix hostpath persistent volume permissions
+      file:
+        path: /var/lib/origin/openshift.local.pv
+        mode: 0777
+        recurse: true
+      ignore_errors: true
+
+    - name: prepare openshift cluster
+      shell: |
+        {{ openshift_cli }} delete project myproject
+        {{ openshift_cli }} apply -f https://raw.githubusercontent.com/openshift/openshift-ansible/release-3.9/roles/openshift_examples/files/examples/v3.9/image-streams/image-streams-centos7.json -n openshift
+        {{ openshift_cli }} create -f https://raw.githubusercontent.com/jboss-openshift/application-templates/ose-v1.4.12/openjdk/openjdk18-image-stream.json -n openshift
+        {{ openshift_cli }} adm policy add-cluster-role-to-user cluster-admin admin
+        {{ openshift_cli }} adm policy add-scc-to-user anyuid -z istio-ingress-service-account -n istio-system
+      ignore_errors: true
 
     - set_fact:
         gogs_hostname: gogs-{{ lab_infra_project }}.{{ apps_hostname_suffix }}
       tags: always
-
-    - name: clean up lab environment
-      shell: "{{ openshift_cli }} delete project {{ lab_infra_project }} istio-system prod{{ project_suffix }}"
-      when: clean_init|bool
-      ignore_errors: true
-      tags: always
-
-    - name: wait for {{ lab_infra_project }} project to get removed
-      shell: "{{ openshift_cli }} get project {{ lab_infra_project }}"
-      ignore_errors: true
-      register: result
-      until: result|failed
-      retries: 30
-      delay: 30
-
-    - name: wait for istio-system project to get removed
-      shell: "{{ openshift_cli }} get project istio-system"
-      ignore_errors: true
-      register: result
-      until: result|failed
-      retries: 30
-      delay: 30
-
-    - name: wait for prod project to get removed
-      shell: "{{ openshift_cli }} get project prod{{ project_suffix }}"
-      ignore_errors: true
-      register: result
-      until: result|failed
-      retries: 30
-      delay: 30
 
     - name: create lab infra project
       shell: "{{ openshift_cli }} new-project {{ lab_infra_project }}"
@@ -82,7 +82,7 @@
         workshopper_workshop_urls: "https://raw.githubusercontent.com/openshift-labs/rhsummit18-cloudnative-guides/master/_rhsummit18.yml"
         workshopper_env_vars:
           PROJECT_SUFFIX: ""
-          OPENSHIFT_MASTER_URL: "{{ openshift_master }}"
+          OPENSHIFT_MASTER_URL: "https://{{ master_hostname }}:8443"
           APPS_HOSTNAME_SUFFIX: "{{ apps_hostname_suffix }}"
           GIT_HOSTNAME: "gogs-{{ lab_infra_project }}.{{ apps_hostname_suffix }}"
           ECLIPSE_CHE_URL: "http://che-{{ lab_infra_project }}.{{ apps_hostname_suffix }}"
@@ -121,25 +121,44 @@
         status_code: 200,201
       tags: eclipse-che
 
-    # deploy istio and prod
-    - include_tasks: init_istio.yml
-      tags: istio
+    # create prod
+    - name: create prod project
+      shell: |
+        {{ openshift_cli }} adm new-project prod{{ project_suffix }} --display-name='CoolStore PROD' --admin='{{ user_openshift }}'
+        {{ openshift_cli }} adm policy add-scc-to-user privileged -z default -n prod{{ project_suffix }}
+        {{ openshift_cli }} adm policy add-scc-to-user anyuid -z default prod{{ project_suffix }}
+        {{ openshift_cli }} adm policy add-role-to-user admin system:serviceaccount:prod{{ project_suffix }}:default -n prod{{ project_suffix }}
+      tags: prod
 
-    # validate cluster
-    - name: check openjdk image stream installed
-      shell: "{{ openshift_cli }} get is redhat-openjdk18-openshift -n openshift"
-      register: jdk_imagestream_result
+    - set_fact:
+        templates_base_url: https://raw.githubusercontent.com/{{ github_account }}/rhsummit18-cloudnative-labs/{{ github_ref }}/openshift
+      tags: prod
+
+    - name: deploy web in prod
+      shell: "{{ openshift_cli }} process -f {{ templates_base_url }}/web-template.yml --param=IMAGE_VERSION=prod -n prod{{ project_suffix }} | {{ openshift_cli }} create -f - -n prod{{ project_suffix }}"
+      tags: prod
+
+    - name: deploy inventory in prod
+      shell: "{{ openshift_cli }} process -f {{ templates_base_url }}/inventory-template.yml --param=IMAGE_VERSION=prod -n prod{{ project_suffix }} | {{ openshift_cli }} create -f - -n prod{{ project_suffix }}"
+      tags: prod
+
+    - name: deploy catalog in prod
+      shell: "{{ openshift_cli }} process -f {{ templates_base_url }}/catalog-template.yml --param=IMAGE_VERSION=prod -n prod{{ project_suffix }} | {{ openshift_cli }} create -f - -n prod{{ project_suffix }}"
+      tags: prod
+
+    - name: add jaeger tracing to the catalog in prod
+      shell: |
+        {{ openshift_cli }} env -n prod{{ project_suffix }} dc/catalog JAEGER_SERVICE_NAME=catalog \
+              JAEGER_ENDPOINT=http://jaeger-collector.istio-system.svc:14267/api/traces \
+              JAEGER_PROPAGATION=b3 \
+              JAEGER_SAMPLER_TYPE=const \
+              JAEGER_SAMPLER_PARAM=1
+      tags: prod
+
+    - name: create istio ingress
+      shell: "{{ openshift_cli }} create -f files/ingress.yml -n prod{{ project_suffix }}"
       ignore_errors: true
-      tags: validate
-
-    - name: display instructions to install openjdk image stream
-      debug:
-        msg:
-          - '### WARNING ###'
-          - 'OpenJDK image stream is not installed. Run the following as cluster admin:'
-          - '{{ openshift_cli }} create -n openshift -f https://raw.githubusercontent.com/openshift/openshift-ansible/release-3.9/roles/openshift_examples/files/examples/v3.9/xpaas-streams/jboss-image-streams.json'
-      when: jdk_imagestream_result|failed   
-      tags: validate     
+      tags: prod
 
     # populate nexus
     - name: populate nexus
